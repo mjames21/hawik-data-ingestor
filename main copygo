@@ -1,0 +1,196 @@
+package main
+
+import (
+	"encoding/csv"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"fabinc/sml/database"
+	"fabinc/sml/models"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/joho/godotenv"
+	"gorm.io/gorm"
+)
+
+// KoboNewSchSubmission represents incoming KoBoToolbox data
+type KoboNewSchSubmission struct {
+	ID             int       `json:"_id"`
+	UUID           string    `json:"_uuid"`
+	SubmissionTime string    `json:"_submission_time"`
+	SchoolName     string    `json:"school_name"`
+	Chiefdom       string    `json:"chiefdom"`
+	Section        string    `json:"section"`
+	Town           string    `json:"town"`
+	Level          string    `json:"level"`
+	Shift          string    `json:"shift"`
+	Geolocation    []float64 `json:"_geolocation"`
+	UserID         string    `json:"userid"`
+}
+
+// handleKoboNewSchSubmission processes and inserts KoBo data into the database
+func handleKoboNewSchSubmission(c *fiber.Ctx, db *gorm.DB) error {
+	var submission KoboNewSchSubmission
+
+	// Debug: Print raw JSON request body
+	fmt.Println("Raw Request Body:", string(c.Body()))
+
+	// Parse JSON request
+	if err := c.BodyParser(&submission); err != nil {
+		fmt.Println("Error decoding JSON:", err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Error decoding JSON", "detail": err.Error()})
+	}
+
+	// Extract latitude & longitude
+	var latitude, longitude string
+	if len(submission.Geolocation) == 2 {
+		latitude = fmt.Sprintf("%f", submission.Geolocation[0])  // Convert float to string
+		longitude = fmt.Sprintf("%f", submission.Geolocation[1]) // Convert float to string
+	} else {
+		latitude, longitude = "", "" // Default if missing
+	}
+
+	// Insert into the database (assuming the table already exists)
+	sqlQuery := `
+		INSERT INTO school_list.temp_school_new
+		(idchiefdom, idsection, idtown, idschool_name, sch_type, shift_status, geopointlatitude, geopointlongitude, school_status, idprocessstatus, userid)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	result := db.Exec(sqlQuery,
+		submission.Chiefdom,
+		submission.Section,
+		submission.Town,
+		submission.SchoolName,
+		submission.Level,
+		submission.Shift,
+		latitude,
+		longitude,
+		1, // SchoolStatus default to 1
+		1, // ProcessStatus default to 1
+		submission.UserID,
+	)
+	fmt.Println(result)
+
+	if result.Error != nil {
+		log.Println("Database insertion error:", result.Error)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database insertion failed"})
+	}
+
+	// Success response
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Data inserted successfully"})
+}
+
+func main() {
+	app := fiber.New()
+
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
+	}
+
+	// Database connection details
+	dbUsername := os.Getenv("DB_USERNAME")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbDatabase := os.Getenv("DB_DATABASE")
+	dbHost := os.Getenv("DB_HOST")
+	corsOrigin := os.Getenv("CORS_ORIGIN")
+	port := os.Getenv("PORT")
+
+	// Connect to the MySQL database
+	DB := database.Mysql(dbUsername, dbPassword, dbDatabase, dbHost)
+	if DB == nil {
+		log.Fatal("Failed to connect to the database")
+	}
+
+	// Apply CORS middleware
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: corsOrigin,
+		AllowHeaders: "Origin, Content-Type, Accept",
+	}))
+
+	// Define API route for KoBo submissions
+	app.Post("/receive-kobo-data-schoolnew-1297732", func(c *fiber.Ctx) error {
+		return handleKoboNewSchSubmission(c, DB)
+	})
+
+	// API route for returning school list as JSON
+	app.Get("/national/json/:api_key", func(c *fiber.Ctx) error {
+		apiKey := c.Params("api_key")
+
+		var consumer models.DataConsumer
+		if err := DB.Where("api_key = ?", apiKey).First(&consumer).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return c.Status(fiber.StatusForbidden).SendString("Access denied")
+			}
+			return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+		}
+
+		var schools []models.School
+		if err := DB.Find(&schools).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+		}
+
+		return c.JSON(schools)
+	})
+
+	// API route for exporting school list as CSV
+	app.Get("/national/csv/:api_key", func(c *fiber.Ctx) error {
+		apiKey := c.Params("api_key")
+
+		var consumer models.DataConsumer
+		if err := DB.Where("api_key = ?", apiKey).First(&consumer).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return c.Status(fiber.StatusForbidden).SendString("Access denied")
+			}
+			return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+		}
+
+		var schools []models.School
+		if err := DB.Find(&schools).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+		}
+
+		today := time.Now().Format("2006-01-02")
+		fileName := fmt.Sprintf("Schoolmasterlist-%s.csv", today)
+
+		// Set CSV headers
+		c.Response().Header.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
+		c.Response().Header.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
+
+		writer := csv.NewWriter(c.Response().BodyWriter())
+		defer writer.Flush()
+
+		// Write CSV headers
+		writer.Write([]string{"ID", "IdemisCode", "Region", "District", "Council", "Chiefdom", "Section", "Town", "SchoolName", "SchType", "ShiftStatus", "SchoolStatus", "GeopointLong", "GeopointLat", "CreatedAt", "UpdatedAt"})
+
+		// Write school data to CSV
+		for _, school := range schools {
+			writer.Write([]string{
+				school.IdemisCode,
+				school.Region,
+				school.District,
+				school.Council,
+				school.Chiefdom,
+				school.Section,
+				school.Town,
+				school.SchoolName,
+				school.SchType,
+				school.ShiftStatus,
+				school.SchoolStatus,
+				school.GeopointLong,
+				school.GeopointLat,
+			})
+		}
+
+		return nil
+	})
+
+	// Start the server
+	log.Printf("Server running on port %s", port)
+	if err := app.Listen(":" + port); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
+}
