@@ -3,9 +3,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -217,7 +221,7 @@ func connectMongo(ctx context.Context) (*mongoDeps, error) {
 	return &mongoDeps{Client: client, Collection: coll}, nil
 }
 
-// --- Elasticsearch wiring (optional) ---
+// --- Elasticsearch wiring (HTTPS + CA) ---
 type esDeps struct{ Client *elasticsearch.Client }
 
 func connectElasticsearchFromEnv() (*esDeps, error) {
@@ -226,26 +230,79 @@ func connectElasticsearchFromEnv() (*esDeps, error) {
 	apiKey := os.Getenv("ES_API_KEY")
 	user := os.Getenv("ES_USERNAME")
 	pass := os.Getenv("ES_PASSWORD")
+	caPath := os.Getenv("ES_CA_CERT_PATH")
+	verify := strings.ToLower(getenv("ES_VERIFY_SSL", "true")) != "false"
 
-	cfg := elasticsearch.Config{}
+	// TLS config
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	if caPath != "" {
+		pem, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, fmt.Errorf("read ES_CA_CERT_PATH: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if ok := pool.AppendCertsFromPEM(pem); !ok {
+			return nil, fmt.Errorf("failed to append CA cert")
+		}
+		tlsCfg.RootCAs = pool
+	}
+	if !verify {
+		// DEV ONLY
+		tlsCfg.InsecureSkipVerify = true
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig:       tlsCfg,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+	}
+
+	cfg := elasticsearch.Config{
+		Transport:     transport,
+		RetryOnStatus: []int{502, 503, 504},
+		MaxRetries:    2,
+	}
+
 	if cloudID != "" {
 		cfg.CloudID = cloudID
 	}
+
 	if urls != "" {
 		cfg.Addresses = splitAndTrim(urls)
 	} else if cloudID == "" {
-		cfg.Addresses = []string{"http://localhost:9200"}
+		// Default to HTTPS since your node is TLS-enabled
+		cfg.Addresses = []string{"https://localhost:9200"}
 	}
+
 	if apiKey != "" {
 		cfg.APIKey = apiKey
 	} else if user != "" || pass != "" {
 		cfg.Username = user
 		cfg.Password = pass
 	}
+
 	cli, err := elasticsearch.NewClient(cfg)
 	if err != nil {
 		return nil, err
 	}
+
+	// Strong startup check
+	res, err := cli.Info()
+	if err != nil {
+		return nil, fmt.Errorf("es.Info: %w", err)
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		b, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("es.Info status=%s body=%s", res.Status(), string(b))
+	}
+
 	return &esDeps{Client: cli}, nil
 }
 
@@ -278,7 +335,7 @@ func splitAndTrim(s string) []string {
 	return out
 }
 
-// ---- New: Health & Stats ----
+// ---- Health & Stats ----
 
 // /health → { mongo:{ok,db,collection}, elastic:{ok,name,cluster_name,version} }
 func healthHandler(m *mongoDeps, es *esDeps) fiber.Handler {
@@ -403,26 +460,34 @@ func main() {
 	corsOrigin := getenv("CORS_ORIGIN", "*")
 
 	app := fiber.New()
-	app.Use(cors.New(cors.Config{AllowOrigins: corsOrigin, AllowHeaders: "Origin, Content-Type, Accept"}))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: corsOrigin,
+		AllowHeaders: "Origin, Content-Type, Accept",
+	}))
 
 	rootCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+
+	// Mongo
 	deps, err := connectMongo(rootCtx)
 	if err != nil {
 		log.Fatalf("mongo connect: %v", err)
 	}
 
+	// Elasticsearch
 	es, esErr := connectElasticsearchFromEnv()
 	if esErr == nil {
 		app.Get("/es/health", esHealthHandler(es))
 	} else {
+		log.Printf("Elasticsearch not configured/failed: %v", esErr)
 		app.Get("/es/health", esHealthHandler(nil))
 	}
 
-	// New: health and stats
+	// Health & Stats
 	app.Get("/health", healthHandler(deps, es))
 	app.Get("/mongo/stats", mongoStatsHandler(deps))
 
+	// Data ingest
 	app.Post("/new_gc_submission", handleNewSubmission(deps))
 
 	log.Printf("Server running on :%s", port)
