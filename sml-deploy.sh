@@ -1,5 +1,5 @@
 #!/bin/bash
 
-cd /var/www/html/sml-data-download-api
-go build -o sml-data
-pm2 start sml-data --name sml-data-api
+cd /var/www/html/sml-data-download-apihawik-data-ingestor
+go build -o hawik-data-ingestor
+pm2 start hawik-data-ingestor --name hawik-data-ingestor
