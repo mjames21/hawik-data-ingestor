@@ -76,7 +76,7 @@ type GraduationCriteria struct {
 	Details                 string `json:"details" bson:"details,omitempty"`
 	MemberName              string `json:"member_name" bson:"member_name,omitempty"`
 	Gender                  string `json:"gender" bson:"gender,omitempty"`
-	Age                     *int   `json:"age" bson:"age,omitempty"`
+	Age                     *int   `json:"age,string" bson:"age,omitempty"` // accepts quoted numbers
 	HouseholdMemberType     string `json:"household_member_type" bson:"household_member_type,omitempty"`
 	HHHeadPhoto             string `json:"hh_head_photo" bson:"hh_head_photo,omitempty"`
 	ShowMemberName          string `json:"show_member_name" bson:"show_member_name,omitempty"`
@@ -90,7 +90,7 @@ type GraduationCriteria struct {
 	ICCP               string `json:"IC_CP" bson:"IC_CP,omitempty"`
 	Intro              string `json:"intro" bson:"intro,omitempty"`
 	InterviewDate      string `json:"interview_date" bson:"interview_date,omitempty"`
-	HHSize             *int   `json:"hh_size" bson:"hh_size,omitempty"`
+	HHSize             *int   `json:"hh_size,string" bson:"hh_size,omitempty"`
 
 	FoodSecurity string `json:"food_security" bson:"food_security,omitempty"`
 	Q1           string `json:"q1" bson:"q1,omitempty"`
@@ -100,7 +100,7 @@ type GraduationCriteria struct {
 	Q3a      string `json:"q3a" bson:"q3a,omitempty"`
 	Q3b      string `json:"q3b" bson:"q3b,omitempty"`
 	Q3c      string `json:"q3c" bson:"q3c,omitempty"`
-	Q3Score  *int   `json:"q3_score" bson:"q3_score,omitempty"`
+	Q3Score  *int   `json:"q3_score,string" bson:"q3_score,omitempty"`
 	Q4       string `json:"q4" bson:"q4,omitempty"`
 
 	BasicNeeds string `json:"basic_needs" bson:"basic_needs,omitempty"`
@@ -120,28 +120,28 @@ type GraduationCriteria struct {
 	Q10bOther        string   `json:"q10b_other" bson:"q10b_other,omitempty"`
 	AssetFirstClass  string   `json:"asset_first_class" bson:"asset_first_class,omitempty"`
 	AssetFCName      string   `json:"asset_f_cname" bson:"asset_f_cname,omitempty"`
-	ChoiceNumber     *int     `json:"choice_number" bson:"choice_number,omitempty"`
+	ChoiceNumber     *int     `json:"choice_number,string" bson:"choice_number,omitempty"`
 	Asset            string   `json:"asset" bson:"asset,omitempty"`
 	AssetSecondClass string   `json:"asset_second_class" bson:"asset_second_class,omitempty"`
 	AssetName        string   `json:"asset_name" bson:"asset_name,omitempty"`
-	AssetNumber      *int     `json:"asset_number" bson:"asset_number,omitempty"`
-	AssetValue       *float64 `json:"asset_value" bson:"asset_value,omitempty"`
-	Q10Score         *int     `json:"q10_score" bson:"q10_score,omitempty"`
+	AssetNumber      *int     `json:"asset_number,string" bson:"asset_number,omitempty"`
+	AssetValue       *float64 `json:"asset_value,string" bson:"asset_value,omitempty"`
+	Q10Score         *int     `json:"q10_score,string" bson:"q10_score,omitempty"`
 
 	Social   string `json:"social" bson:"social,omitempty"`
 	Q11      string `json:"q11" bson:"q11,omitempty"`
 	Q11Other string `json:"q11_other" bson:"q11_other,omitempty"`
 	Q12      string `json:"q12" bson:"q12,omitempty"`
-	Q11Score *int   `json:"q11_score" bson:"q11_score,omitempty"`
+	Q11Score *int   `json:"q11_score,string" bson:"q11_score,omitempty"`
 
 	SelfEfficacy string `json:"self_efficacy" bson:"self_efficacy,omitempty"`
 	Q13a         string `json:"q13a" bson:"q13a,omitempty"`
 	Q13b         string `json:"q13b" bson:"q13b,omitempty"`
 	Q13c         string `json:"q13c" bson:"q13c,omitempty"`
 	Q13d         string `json:"q13d" bson:"q13d,omitempty"`
-	Q13Score     *int   `json:"q13_score" bson:"q13_score,omitempty"`
+	Q13Score     *int   `json:"q13_score,string" bson:"q13_score,omitempty"`
 
-	GreenCount *int   `json:"green_count" bson:"green_count,omitempty"`
+	GreenCount *int   `json:"green_count,string" bson:"green_count,omitempty"`
 	HasRed     string `json:"has_red" bson:"has_red,omitempty"`
 	GradStatus string `json:"grad_status" bson:"grad_status,omitempty"`
 	Result     string `json:"result" bson:"result,omitempty"`
