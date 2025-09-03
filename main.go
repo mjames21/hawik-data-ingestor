@@ -1,4 +1,3 @@
-// cmd/sml-server/main.go
 package main
 
 import (
