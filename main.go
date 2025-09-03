@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	elasticsearch "github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/joho/godotenv"
@@ -76,7 +78,7 @@ type GraduationCriteria struct {
 	Details                 string `json:"details" bson:"details,omitempty"`
 	MemberName              string `json:"member_name" bson:"member_name,omitempty"`
 	Gender                  string `json:"gender" bson:"gender,omitempty"`
-	Age                     *int   `json:"age,string" bson:"age,omitempty"` // accepts quoted numbers
+	Age                     *int   `json:"age,string" bson:"age,omitempty"` // accept quoted numbers
 	HouseholdMemberType     string `json:"household_member_type" bson:"household_member_type,omitempty"`
 	HHHeadPhoto             string `json:"hh_head_photo" bson:"hh_head_photo,omitempty"`
 	ShowMemberName          string `json:"show_member_name" bson:"show_member_name,omitempty"`
@@ -424,7 +426,7 @@ func mongoStatsHandler(m *mongoDeps) fiber.Handler {
 }
 
 // --- HTTP Handlers ---
-func handleNewSubmission(deps *mongoDeps) fiber.Handler {
+func handleNewSubmission(mDeps *mongoDeps, es *esDeps) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var sub GraduationCriteria
 		if err := c.BodyParser(&sub); err != nil {
@@ -439,17 +441,46 @@ func handleNewSubmission(deps *mongoDeps) fiber.Handler {
 		if err := bson.Unmarshal(raw, &doc); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "unmarshal failed", "detail": err.Error()})
 		}
-		doc["created_at"] = time.Now().UTC()
+		createdAt := time.Now().UTC()
+		doc["created_at"] = createdAt
 		if gp := parseGPS(sub.GPS); gp != nil {
 			doc["location"] = gp
 		}
 
 		ctx, cancel := context.WithTimeout(c.Context(), 8*time.Second)
 		defer cancel()
-		if _, err := deps.Collection.InsertOne(ctx, doc); err != nil {
+		if _, err := mDeps.Collection.InsertOne(ctx, doc); err != nil {
 			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "mongo insert failed", "detail": err.Error()})
 		}
-		return c.Status(http.StatusOK).JSON(fiber.Map{"message": "submission inserted"})
+
+		// Optional: index into Elasticsearch if configured
+		resp := fiber.Map{"message": "submission inserted"}
+		if es != nil && es.Client != nil {
+			indexName := getenv("ES_INDEX", "graduation_criteria")
+			if indexName != "" {
+				esDoc := make(map[string]any, len(doc)+1)
+				for k, v := range doc {
+					esDoc[k] = v
+				}
+				esDoc["@timestamp"] = createdAt
+				body, _ := json.Marshal(esDoc)
+				req := esapi.IndexRequest{Index: indexName, Body: bytes.NewReader(body), Refresh: "true"}
+				res, err := req.Do(ctx, es.Client)
+				if err != nil {
+					resp["es_index_error"] = err.Error()
+				} else {
+					defer res.Body.Close()
+					if res.IsError() {
+						b, _ := io.ReadAll(res.Body)
+						resp["es_index_error"] = fmt.Sprintf("status=%s body=%s", res.Status(), string(b))
+					} else {
+						resp["es_indexed"] = true
+						resp["es_index"] = indexName
+					}
+				}
+			}
+		}
+		return c.Status(http.StatusOK).JSON(resp)
 	}
 }
 
@@ -488,7 +519,7 @@ func main() {
 	app.Get("/mongo/stats", mongoStatsHandler(deps))
 
 	// Data ingest
-	app.Post("/new_gc_submission", handleNewSubmission(deps))
+	app.Post("/new_gc_submission", handleNewSubmission(deps, es))
 
 	log.Printf("Server running on :%s", port)
 	if err := app.Listen(":" + port); err != nil {
